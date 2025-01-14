@@ -765,9 +765,21 @@ class EnhancedOptionsAnalyzer:
         self.oi_analyzer = EnhancedOIAnalyzer()
         self.risk_reward_ratio = 1.5
         self.min_volume = 100
-
+        self.cached_calculator = CachedCalculator()
+    
+    @performance_monitor.track_execution
     def analyze_instrument(self, index_data: List[List], option_data: List[List], symbol: str) -> Dict:
-        """Main analysis entry point for any financial instrument"""
+        """
+        Main analysis entry point for any financial instrument
+        
+        Args:
+            index_data: List of lists containing OHLCV data for the index
+            option_data: List of lists containing OHLCV data for the option
+            symbol: Trading symbol to analyze
+            
+        Returns:
+            Dict containing analysis results
+        """
         try:
             # Parse the symbol
             instrument_info = parse_option_symbol(symbol)
@@ -775,7 +787,7 @@ class EnhancedOptionsAnalyzer:
             # Process index data
             index_df = self._process_data(data=index_data, is_index=True)
             if index_df.empty:
-                raise ValueError("Invalid index data provided")
+                raise DataValidationError("Invalid index data provided")
                 
             # Process option data if available
             option_df = self._process_data(data=option_data, is_index=False) if option_data else pd.DataFrame()
@@ -809,10 +821,10 @@ class EnhancedOptionsAnalyzer:
                 'status': 'success',
                 'analysis': {
                     'instrument_info': instrument_info,
-                    'signals': signals,
-                    'risk_parameters': risk_params,
-                    'recommendations': recommendations,
-                    'market_regime': regime
+                    'signals': convert_to_serializable(signals),
+                    'risk_parameters': convert_to_serializable(risk_params),
+                    'recommendations': convert_to_serializable(recommendations),
+                    'market_regime': convert_to_serializable(regime)
                 }
             }
             
@@ -824,7 +836,16 @@ class EnhancedOptionsAnalyzer:
             }
 
     def _process_data(self, data: List[List], *, is_index: bool = False) -> pd.DataFrame:
-        """Process raw OHLCV data"""
+        """
+        Process raw OHLCV data into a pandas DataFrame
+        
+        Args:
+            data: List of lists containing OHLCV data
+            is_index: Boolean flag indicating if data is for index
+            
+        Returns:
+            Processed pandas DataFrame
+        """
         try:
             # Create DataFrame with proper column names
             df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -844,29 +865,25 @@ class EnhancedOptionsAnalyzer:
         except Exception as e:
             logger.error(f"Error processing {'index' if is_index else 'option'} data: {str(e)}")
             return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
-        
+
     def generate_signals(self, context: MarketContext, regime: Dict) -> Dict:
-        """Generate trading signals with optional OI data"""
+        """Generate trading signals with enhanced market regime integration"""
         try:
-            # Price action signals (always available)
+            # Price action signals
             price_signals = self._analyze_price_action(context)
 
-            # Volume analysis (always available)
+            # Volume analysis
             volume_signals = self._analyze_volume(context)
 
-            # OI analysis (optional)
-            oi_signals = None
-            if not context.oi_history.empty:
-                oi_signals = self._analyze_oi(context)
-            else:
-                oi_signals = {
-                    'trend': 'NO_DATA',
-                    'buildup': 'UNKNOWN',
-                    'current_oi': 0,
-                    'oi_change': 0
-                }
+            # OI analysis
+            oi_signals = self._analyze_oi(context) if not context.oi_history.empty else {
+                'trend': 'NO_DATA',
+                'buildup': 'UNKNOWN',
+                'current_oi': 0,
+                'oi_change': 0
+            }
 
-            # Calculate score with available data
+            # Calculate combined score
             combined_score = self._calculate_signal_score(
                 price_signals,
                 volume_signals,
@@ -889,29 +906,26 @@ class EnhancedOptionsAnalyzer:
     def _analyze_price_action(self, context: MarketContext) -> Dict:
         """Analyze price action patterns"""
         try:
-            option_df = context.option_history
+            df = context.option_history if not context.option_history.empty else context.index_history
 
             # Calculate indicators
-            indicators = self.tech_indicators
-            rsi = indicators.calculate_rsi(option_df['close'])
-            macd = indicators.calculate_macd(option_df['close'])
-            bb = indicators.calculate_bollinger_bands(option_df['close'])
+            rsi = self.tech_indicators.calculate_rsi(df['close'])
+            macd = self.tech_indicators.calculate_macd(df['close'])
+            bb = self.tech_indicators.calculate_bollinger_bands(df['close'])
 
             # Get latest values
-            latest = option_df.iloc[-1]
             latest_rsi = rsi.iloc[-1]
             latest_macd = macd['histogram'].iloc[-1]
+            latest_price = df['close'].iloc[-1]
 
             # Check Bollinger Band position
-            price = latest['close']
             bb_position = 'MIDDLE'
-            if price > bb['upper_band'].iloc[-1]:
+            if latest_price > bb['upper_band'].iloc[-1]:
                 bb_position = 'ABOVE'
-            elif price < bb['lower_band'].iloc[-1]:
+            elif latest_price < bb['lower_band'].iloc[-1]:
                 bb_position = 'BELOW'
 
-            # Generate signals
-            signals = {
+            return {
                 'rsi': {
                     'value': float(latest_rsi),
                     'signal': 'OVERSOLD' if latest_rsi < 30 else 'OVERBOUGHT' if latest_rsi > 70 else 'NEUTRAL'
@@ -925,8 +939,6 @@ class EnhancedOptionsAnalyzer:
                     'bandwidth': float(bb['bandwidth'].iloc[-1])
                 }
             }
-
-            return signals
 
         except Exception as e:
             logger.error(f"Error in price action analysis: {str(e)}")
