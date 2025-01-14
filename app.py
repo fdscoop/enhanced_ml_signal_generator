@@ -23,8 +23,9 @@ from scipy.stats import norm, stats
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import structlog
+from dataclasses import dataclass, field
+from typing import Dict
 
-# Configuration
 @dataclass
 class Config:
     """Global configuration settings"""
@@ -32,11 +33,11 @@ class Config:
     MIN_PREMIUM: float = 5.0
     MAX_RISK_PERCENT: float = 0.30
     DEFAULT_VOLATILITY: float = 0.30
-    LOOKBACK_PERIODS: Dict[str, int] = {
+    LOOKBACK_PERIODS: Dict[str, int] = field(default_factory=lambda: {
         'SHORT': 20,
         'MEDIUM': 50,
         'LONG': 200
-    }
+    })
     
     # Error thresholds
     MIN_VOLUME: int = 100
@@ -44,7 +45,7 @@ class Config:
     
     # Risk management
     DEFAULT_ACCOUNT_SIZE: float = 100000
-    MAX_RISK_PER_TRADE: float = 0.02  # 2% risk per trade
+    MAX_RISK_PER_TRADE: float = 0.02
 
 config = Config()
 
