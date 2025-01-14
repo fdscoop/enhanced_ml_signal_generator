@@ -766,35 +766,8 @@ class EnhancedOptionsAnalyzer:
         self.risk_reward_ratio = 1.5
         self.min_volume = 100
 
-    def _process_data(self, data: List[List], *, is_index: bool = False) -> pd.DataFrame:
-        """
-        Process raw OHLCV data with special handling for index data.
-        Note: is_index parameter is keyword-only to prevent argument conflicts.
-        """
-        try:
-            # Create DataFrame with proper column names
-            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df.set_index('timestamp', inplace=True)
-            
-            # Convert all price columns to float
-            for col in ['open', 'high', 'low', 'close']:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-            if not is_index:
-                df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-                df['oi'] = df['volume'].cumsum()
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error processing {'index' if is_index else 'option'} data: {str(e)}")
-            # Return empty DataFrame with required columns
-            return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
-
-    @performance_monitor.track_execution
     def analyze_instrument(self, index_data: List[List], option_data: List[List], symbol: str) -> Dict:
-        """Analyze any financial instrument (index, stock, or option)"""
+        """Main analysis entry point for any financial instrument"""
         try:
             # Parse the symbol
             instrument_info = parse_option_symbol(symbol)
@@ -813,15 +786,18 @@ class EnhancedOptionsAnalyzer:
                 index_history=index_df,
                 option_price=float(option_df['close'].iloc[-1]) if not option_df.empty else 0.0,
                 option_history=option_df,
-                option_chain=pd.DataFrame(),
+                option_chain=pd.DataFrame(),  # Empty for now
                 strike_price=instrument_info.get('strike', 0.0),
                 days_to_expiry=instrument_info.get('days_to_expiry', 0),
                 option_type=instrument_info.get('option_type', ''),
                 oi_history=option_df[['volume', 'oi']] if not option_df.empty else pd.DataFrame()
             )
             
-            # Generate signals based on available data
-            signals = self.generate_signals(context, {})  # Empty regime dict for now
+            # Detect market regime
+            regime = self.regime_detector.detect_regime(context)
+            
+            # Generate signals
+            signals = self.generate_signals(context, regime)
             
             # Calculate risk parameters
             risk_params = self.calculate_risk_parameters(context, signals, instrument_info)
@@ -835,7 +811,8 @@ class EnhancedOptionsAnalyzer:
                     'instrument_info': instrument_info,
                     'signals': signals,
                     'risk_parameters': risk_params,
-                    'recommendations': recommendations
+                    'recommendations': recommendations,
+                    'market_regime': regime
                 }
             }
             
@@ -846,6 +823,28 @@ class EnhancedOptionsAnalyzer:
                 'message': str(e)
             }
 
+    def _process_data(self, data: List[List], *, is_index: bool = False) -> pd.DataFrame:
+        """Process raw OHLCV data"""
+        try:
+            # Create DataFrame with proper column names
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df.set_index('timestamp', inplace=True)
+            
+            # Convert all price columns to float
+            for col in ['open', 'high', 'low', 'close']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+            if not is_index:
+                df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+                df['oi'] = df['volume'].cumsum()
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error processing {'index' if is_index else 'option'} data: {str(e)}")
+            return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
+        
     def generate_signals(self, context: MarketContext, regime: Dict) -> Dict:
         """Generate trading signals with optional OI data"""
         try:
